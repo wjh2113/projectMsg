@@ -1,0 +1,30 @@
+{
+  "name": "project-msg",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "node --watch server/index.js",
+    "dev:client": "vite --config client/vite.config.js",
+    "build": "vite build --config client/vite.config.js",
+    "start": "node server/index.js",
+    "agent": "node server/agent.js",
+    "db:ping": "node -e \"import('dotenv/config'); import('./server/db.js').then(async m=>{await m.ensureSchema(); const r=await m.query('select current_database() db, now()'); console.log(r.rows[0]); await m.closePool();})\""
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "concurrently": "^10.0.3",
+    "dotenv": "^16.6.1",
+    "express": "^5.2.1",
+    "pg": "^8.16.3",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.3",
+    "vite": "^8.1.5"
+  }
+}
