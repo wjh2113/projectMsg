@@ -20,8 +20,18 @@ const DEFAULT_LLM = {
 
 const THEMES = new Set(['luxury', 'neu', 'minimal', 'classic']);
 
+function defaultScanRoots() {
+  if (process.platform === 'darwin') {
+    return [path.join(os.homedir(), 'Projects'), path.join(os.homedir(), 'Developer')];
+  }
+  if (process.platform === 'win32') {
+    return ['D:\\VSworkspace'];
+  }
+  return [path.join(os.homedir(), 'projects')];
+}
+
 const DEFAULT_SETTINGS = {
-  scanRoots: ['D:\\VSworkspace'],
+  scanRoots: defaultScanRoots(),
   scanDepth: 1,
   theme: 'luxury',
   llm: { ...DEFAULT_LLM },
@@ -37,7 +47,10 @@ export async function initStore() {
     await ensureLocalNode();
     await maybeMigrateFromJson();
     return true;
-  })();
+  })().catch((err) => {
+    ready = null;
+    throw err;
+  });
   return ready;
 }
 
@@ -129,59 +142,112 @@ export async function readJson(filePath, fallback) {
   return readJsonFile(filePath, fallback);
 }
 
+async function sleep(ms) {
+  await new Promise((r) => setTimeout(r, ms));
+}
+
 export async function writeJson(filePath, data) {
   await fs.mkdir(DATA_DIR, { recursive: true });
   const text = JSON.stringify(data, null, 2) + '\n';
-  const tmp = `${filePath}.${process.pid}.tmp`;
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   await fs.writeFile(tmp, text, 'utf8');
-  try {
-    await fs.copyFile(tmp, filePath);
-  } finally {
+  let lastErr = null;
+  for (let i = 0; i < 8; i += 1) {
     try {
-      await fs.unlink(tmp);
-    } catch {
-      // ignore
+      // Prefer atomic replace; fall back to copy on Windows rename quirks
+      try {
+        await fs.rename(tmp, filePath);
+      } catch {
+        await fs.copyFile(tmp, filePath);
+        await fs.unlink(tmp).catch(() => {});
+      }
+      return;
+    } catch (err) {
+      lastErr = err;
+      const code = err?.code || '';
+      if (code === 'EBUSY' || code === 'EPERM' || code === 'EACCES') {
+        await sleep(40 * (i + 1));
+        continue;
+      }
+      break;
     }
   }
+  try {
+    await fs.unlink(tmp);
+  } catch {
+    // ignore
+  }
+  throw lastErr || new Error(`failed to write ${filePath}`);
 }
 
+let cachedLocalNode = null;
+let ensureNodePromise = null;
+
 export async function ensureLocalNode() {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  let local = await readJsonFile(NODE_FILE, null);
-  const hostname = os.hostname();
-  const role = String(process.env.NODE_ROLE || local?.role || 'hub').toLowerCase() === 'agent'
-    ? 'agent'
-    : 'hub';
-  const id = String(process.env.NODE_ID || local?.id || randomUUID());
-  const name = String(process.env.NODE_NAME || local?.name || hostname || 'local');
-  const scanDepth = normalizeScanDepth(
-    process.env.SCAN_DEPTH || local?.scanDepth,
-    DEFAULT_SETTINGS.scanDepth,
-  );
+  if (cachedLocalNode) {
+    // Refresh DB heartbeat at most every 60s without rewriting node.json
+    const touchedAt = cachedLocalNode._dbTouchedAt || 0;
+    if (Date.now() - touchedAt < 60_000) return cachedLocalNode;
+  }
+  if (ensureNodePromise) return ensureNodePromise;
 
-  local = {
-    id,
-    name,
-    hostname,
-    role,
-    scanDepth,
-    updatedAt: new Date().toISOString(),
-  };
-  await writeJson(NODE_FILE, local);
+  ensureNodePromise = (async () => {
+    await fs.mkdir(DATA_DIR, { recursive: true });
+    let local = await readJsonFile(NODE_FILE, null);
+    const hostname = os.hostname();
+    const role = String(process.env.NODE_ROLE || local?.role || 'hub').toLowerCase() === 'agent'
+      ? 'agent'
+      : 'hub';
+    const id = String(process.env.NODE_ID || local?.id || randomUUID());
+    const name = String(process.env.NODE_NAME || local?.name || hostname || 'local');
+    const scanDepth = normalizeScanDepth(
+      process.env.SCAN_DEPTH || local?.scanDepth,
+      DEFAULT_SETTINGS.scanDepth,
+    );
 
-  await query(
-    `INSERT INTO nodes (id, name, hostname, role, scan_roots, scan_depth, last_seen_at, meta, updated_at)
-     VALUES ($1, $2, $3, $4, '[]'::jsonb, $5, NOW(), '{}'::jsonb, NOW())
-     ON CONFLICT (id) DO UPDATE SET
-       name = EXCLUDED.name,
-       hostname = EXCLUDED.hostname,
-       role = EXCLUDED.role,
-       scan_depth = EXCLUDED.scan_depth,
-       last_seen_at = NOW(),
-       updated_at = NOW()`,
-    [id, name, hostname, role, scanDepth],
-  );
-  return local;
+    const next = {
+      id,
+      name,
+      hostname,
+      role,
+      scanDepth,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const unchanged =
+      local &&
+      local.id === next.id &&
+      local.name === next.name &&
+      local.hostname === next.hostname &&
+      local.role === next.role &&
+      Number(local.scanDepth) === Number(next.scanDepth);
+
+    if (!unchanged) {
+      await writeJson(NODE_FILE, next);
+    }
+
+    await query(
+      `INSERT INTO nodes (id, name, hostname, role, scan_roots, scan_depth, last_seen_at, meta, updated_at)
+       VALUES ($1, $2, $3, $4, '[]'::jsonb, $5, NOW(), '{}'::jsonb, NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         name = EXCLUDED.name,
+         hostname = EXCLUDED.hostname,
+         role = EXCLUDED.role,
+         scan_depth = EXCLUDED.scan_depth,
+         last_seen_at = NOW(),
+         updated_at = NOW()`,
+      [id, name, hostname, role, scanDepth],
+    );
+
+    cachedLocalNode = { ...next, _dbTouchedAt: Date.now() };
+    return cachedLocalNode;
+  })();
+
+  try {
+    return await ensureNodePromise;
+  } finally {
+    ensureNodePromise = null;
+  }
 }
 
 export async function getLocalNode() {

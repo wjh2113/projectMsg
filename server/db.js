@@ -117,8 +117,17 @@ export async function ensureSchema() {
   await query(SCHEMA_SQL);
   await query(
     `INSERT INTO settings (id, theme, scan_roots, scan_depth, llm, servers)
-     VALUES (1, 'luxury', '["D:\\\\VSworkspace"]'::jsonb, 1, '{}'::jsonb, '[]'::jsonb)
+     VALUES (1, 'luxury', $1::jsonb, 1, '{}'::jsonb, '[]'::jsonb)
      ON CONFLICT (id) DO NOTHING`,
+    [
+      JSON.stringify(
+        process.platform === 'darwin'
+          ? [`${process.env.HOME || ''}/Projects`.replace(/\/+/g, '/')]
+          : process.platform === 'win32'
+            ? ['D:\\VSworkspace']
+            : [`${process.env.HOME || ''}/projects`.replace(/\/+/g, '/')],
+      ),
+    ],
   );
 }
 

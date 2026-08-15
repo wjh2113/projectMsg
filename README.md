@@ -14,7 +14,12 @@ CREATE DATABASE projectmsg OWNER postgres;
 2. 配置环境变量：
 
 ```bash
+# macOS / Linux
+cp .env.example .env
+
+# Windows
 copy .env.example .env
+
 # 编辑 .env：DATABASE_URL、HOST、LLM_* 等
 ```
 
@@ -23,13 +28,22 @@ copy .env.example .env
 ```env
 DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/projectmsg
 HOST=0.0.0.0
-PORT=8790
+PORT=8800
 NODE_ROLE=hub
 SCAN_DEPTH=2
 LLM_API_KEY=sk-...
 LLM_ENABLED=true
 ```
 
+macOS 可用 Homebrew 安装依赖：
+
+```bash
+brew install node@22 postgresql@18
+brew services start postgresql@18
+createdb projectmsg
+```
+
+扫描根目录在 macOS 上请填 POSIX 路径（如 `/Users/你/Projects`），不要用 `D:\...` 或 UNC `\\host\share`；网络盘请先挂到 `/Volumes/...`。
 3. 安装并启动：
 
 ```bash

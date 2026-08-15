@@ -98,7 +98,11 @@ export async function upsertServer(input) {
     throw err;
   }
   if (saved.authMethod === 'key' && !saved.privateKeyPath) {
-    const err = new Error('密钥认证请填写本机私钥路径，例如 C:\\Users\\你\\.ssh\\id_rsa');
+    const err = new Error(
+      process.platform === 'win32'
+        ? '密钥认证请填写本机私钥路径，例如 C:\\Users\\你\\.ssh\\id_ed25519'
+        : '密钥认证请填写本机私钥路径，例如 ~/.ssh/id_ed25519',
+    );
     err.status = 400;
     throw err;
   }
